@@ -1,2 +1,3 @@
 datasets
-processed_docs.pkl
+*.pkl
+__pycache__
