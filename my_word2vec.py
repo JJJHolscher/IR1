@@ -23,7 +23,7 @@ OCCURANCE_THRESHHOLD = 50
 EMBEDDING_SIZE = 100
 # The number of words before or after a word that are considered its context.
 CONTEXT_WINDOW = 2
-#
+# Training batch size for the SkipGram.
 BATCH_SIZE = 100
 
 
@@ -41,11 +41,23 @@ class SkipGram(torch.nn.Module):
         out = torch.mm(center_emb, context_emb.T)
         return torch.nn.functional.logsigmoid(out)
 
-    def train(self, dataset):
-        for center, context, target in dataset:
-            out = self(center, context)[0]
-            self.loss_func(out, target)
+    def train(self, corpus):
+        print(1)
+        for batch in self.to_batches(corpus):
+            centers, contexts, targets = batch[:, 0], batch[:, 1], batch[:, 2]
 
+            out = self(centers, contexts)
+            print(out)
+            if input("Continue? y/n") == 'n':
+                quit()
+            self.loss_func(out, targets)
+
+    def to_batches(self, corpus, size=BATCH_SIZE):
+        corpus = corpus.copy()
+        random.shuffle(corpus)
+        for start_i, end_i in zip(range(0, len(corpus), size),
+                                  range(-len(corpus) + size, 0, -size)):
+            yield sample(corpus[start_i : end_i])
 
 
 def all_words_to_indices(docs_by_id):
@@ -67,23 +79,26 @@ def all_words_to_indices(docs_by_id):
         if len(doc_repr) > 1:
             corpus.append(torch.LongTensor(doc_repr))
 
-    return torch.LongTensor(corpus), tok2idx
+    return corpus, tok2idx
 
 
 def preprocess(path=PROCESSED_DOCS_PATH,):
     # Load the preprocessed docs_by_id file if it exists.
     if os.path.exists(path):
+        print("Loading the preprocessed files...")
         with open(path, "rb") as reader:
             return pickle.load(reader)
 
     # (Down)load the dataset from the ap files and get it in the right form.
     download_ap.download_dataset()
     docs_by_id = read_ap.get_processed_docs()
+    print("Filtering infrequent words...")
     docs_by_id = filter_infrequent(docs_by_id)
+    print("Converting words to indices...")
     corpus, tok2idx = all_words_to_indices(docs_by_id)
-    dataset = sample(corpus)
 
     # Store the preprocessing results for faster future retrieval.
+    print("Storing the preprocessed files...")
     with open(path, "wb") as writer:
         pickle.dump((corpus, tok2idx), writer)
     return corpus, tok2idx
@@ -122,24 +137,20 @@ def sample(corpus, context_window=CONTEXT_WINDOW):
             # negative sampling
             num_neg_samples = max_context_idx - min_context_idx - 1
 
-            for fake_doc_repr in random.choices(corpus, k=2 * context_window):
+            for fake_doc_repr in random.choices(corpus, k=num_neg_samples):
                 fake_context = random.choice(fake_doc_repr)
                 dataset.append(torch.Tensor([token, fake_context, 0]))
 
             # positive sampling
             for context_idx in range(min_context_idx, i):
-                dataset.append(torch.Tensor[token, doc_repr[context_idx], 1])
-
-            if i == len(doc_repr) - 1: continue
-
-            for context_idx in range(i + 1, max_context_idx:
-                dataset.append(torch.Tensor[token, doc_repr[context_idx], 1])
+                dataset.append(torch.Tensor([token, doc_repr[context_idx], 1]))
+            for context_idx in range(i + 1, max_context_idx):
+                dataset.append(torch.Tensor([token, doc_repr[context_idx], 1]))
 
     return dataset
 
 
 if __name__ == "__main__":
-    docs_by_id = filter_infrequent()
-    tok2idx = Tok2Idx(docs_by_id)
-
-
+    corpus, tok2idx = preprocess()
+    skipgram = SkipGram(tok2idx)
+    skipgram.train(corpus)
