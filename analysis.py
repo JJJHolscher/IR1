@@ -5,19 +5,19 @@ from my_word2vec import get_trained_doc2vec, SkipGram, search_SkipGram,\
 
 
 class Doc2Vec():
-	def _init_():
-		self.model = get_trained_doc2vec()
+    def _init_():
+        self.model = get_trained_doc2vec()
 
-	def search(query):
+    def search(query):
         return search_doc2vec(self.model, query)
 
 
 class Word2Vec():
 
-	def _init_():
+    def _init_():
         self.model = SkipGram.create(tok2idx)
 
-	def search(query):
+    def search(query):
         return search_SkipGram(self.model, query)
 
 
@@ -59,6 +59,4 @@ def similar_words(in_words, skipgram):
 if __name__ == '__main__':
     query = "sentient quiet start and woman"
     print(search(query, doc2vec=True)[:10])
-
-    similar_words(['quiet', 'quite', 'start', 'stop', 'march', 'woman', 'trump'], SkipGram.create())
 
