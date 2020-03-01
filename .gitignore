@@ -1,3 +1,5 @@
 datasets
 *.pkl
 __pycache__
+*.gsm
+*.pth
