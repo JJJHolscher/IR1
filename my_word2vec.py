@@ -3,11 +3,12 @@ A word2vec implementation by Fabrizio and Jochem
 """
 
 import os
-import random
-import torch
 import pickle
+import random
 from collections import Counter
+
 import gensim
+import torch
 
 # Own libraries
 import download_ap
@@ -53,6 +54,16 @@ class SkipGram(torch.nn.Module):
                                              sparse=True)
         self.loss_func = torch.nn.MSELoss()
 
+    @staticmethod
+    def create(tok2idx, path=SKIPGRAM_PATH, embedding_size=EMBEDDING_SIZE):
+        skipgram = SkipGram(tok2idx, embedding_size=embedding_size)
+        if os.path.exists(path):
+            print("Loading the skipgram from disk...")
+            stored_skipgram = torch.load(path)
+            skipgram.load_state_dict(stored_skipgram)
+            skipgram.eval()
+        return skipgram
+
     def forward(self, center_id, context_id):
         """ Forward propagation step """
         center_emb = self.embeddings(center_id)
@@ -60,13 +71,14 @@ class SkipGram(torch.nn.Module):
         out = torch.mm(center_emb, context_emb.T)
         return torch.nn.functional.logsigmoid(out)
 
-    def train(self, corpus, save_path=SKIPGRAM_PATH):
+    def _train(self, corpus, save_path=SKIPGRAM_PATH):
         """ Train """
         num_batches = len(corpus) // BATCH_SIZE + 1
         optimizer = torch.optim.SparseAdam(self.parameters())
         try:
             for i, batch in enumerate(self.to_batches(corpus)):
-                centers, contexts, targets = batch[:, 0], batch[:, 1], batch[:, 2]
+                centers, contexts = batch[:, 0], batch[:, 1]
+                targets = batch[:, 2]
 
                 optimizer.zero_grad()
                 out = self(centers, contexts)
@@ -93,14 +105,13 @@ class SkipGram(torch.nn.Module):
         yield sample(corpus[end_i:])
 
     def doc2vec(self, doc):
-        """ Return a vector representation of the input document by taking the
+        """
+        Return a vector representation of the input document by taking the
         average word embedding of all words in the document.
         """
-        word_embeddings = []
-        for token_idx in doc:
-            word_embeddings.append(self.embeddings(token_idx))
+        word_embeddings = self.embeddings(torch.LongTensor(doc))
 
-        vec = torch.Tensor(len(word_embeddings[0]))
+        vec = torch.zeros(len(self.embeddings(torch.LongTensor([0])).T))
         for word_embd in word_embeddings:
             vec += word_embd
 
@@ -108,7 +119,8 @@ class SkipGram(torch.nn.Module):
 
 
 def all_words_to_indices(docs_by_id):
-    """ Create a corpus where all string representations of words are replaced
+    """
+    Create a corpus where all string representations of words are replaced
     by index representations.
     """
     id2corpus = {}
@@ -198,6 +210,10 @@ def sample(corpus, context_window=CONTEXT_WINDOW):
 
 
 def get_docs_as_vecs(model, id2corpus, path=SKIPGRAM_DOC2VEC_PATH):
+    """
+    Load or create a dictionary mapping the id of a document to its vector
+    representation as made by the word2vec model.
+    """
     if os.path.exists(path):
         print("Loading the doc2vec dictionary of the skipgram...")
         with open(path, "rb") as reader:
@@ -214,21 +230,44 @@ def get_docs_as_vecs(model, id2corpus, path=SKIPGRAM_DOC2VEC_PATH):
     return id2vec
 
 
-def search(model, query, id2corpus, result_len=MAX_NUMBER_OF_RESULTS):
-    id2vec = get_docs_as_vecs(model, id2corpus)
+def search_SkipGram(model, query, id2corpus, result_len=MAX_NUMBER_OF_RESULTS):
+    """
+    Return the top 1000 ranked documents that match best the query according
+    to the input model.
+    """
 
-    # Transform the query to a vector.
+    # Create a vector representation of the query.
     query_repr = []
     for q_tok in read_ap.process_text(query):
-        if q_tok in model.tok2id:
-            query_repr = model.tok2id[q_tok]
-    q_vec = model.doc2vec(query_repr)
+        if q_tok in model.tok2idx:
+            query_repr.append(model.tok2idx[q_tok])
+    q_vec = model.doc2vec(query_repr).unsqueeze(dim=0)
+    q_vec_norm = torch.mm(q_vec, q_vec.T)
 
-    cos = torch.nn.CosineSimilarity()
-    results = {doc_id: cos(q_vec, d_vec) for doc_id, d_vec in id2vec.items()}
+    results = {}
+    for doc_id, doc in id2corpus.items():
+        vec = model.doc2vec(doc).unsqueeze(dim=0)
+        norm = torch.mm(vec, vec.T)
+        results[doc_id] = torch.mm(vec, q_vec.T) / (norm * q_vec_norm)
+
     results = list(results.items())
     results.sort(key=lambda _: _[1])
-    return results[result_len]
+    return results[:result_len]
+
+
+
+##### DOC2VEC METHODS #####
+def get_trained_doc2vec(path=DOC2VEC_PATH, docs_by_id=None,
+                        batch_size=BATCH_SIZE, batched=False):
+
+    if os.path.exists(path):
+        return gensim.models.doc2vec.Doc2Vec.load(path)
+    elif None is docs_by_id:
+        raise ValueError(f"""docs_by_id variable should hold a dictionary
+                         mapping doc_id to their content as a list of
+                         word tokens if {path} does not exist.""")
+    return train_doc2vec(docs_by_id, batch_size=batch_size, path=path,
+                         batched=batched)
 
 
 def train_doc2vec(docs_by_id, batch_size=BATCH_SIZE, path=DOC2VEC_PATH,
@@ -243,38 +282,57 @@ def train_doc2vec(docs_by_id, batch_size=BATCH_SIZE, path=DOC2VEC_PATH,
                                           context_window=D2V_CONTEXT_WINDOW)
     model.build_vocab(corpus)
 
-    if batched:
-        print("Start training", len(corpus) // batch_size, "batches for doc2vec...")
+    try:
         batch_i = 0
-        try:
+        if batched:
+            print('Start training', len(corpus) // batch_size,
+                  'batches for doc2vec...')
+            path = 'batched_' + path
             for batch_i in range(0, len(corpus), batch_size):
                 batch = corpus[batch_i: batch_i + min(len(corpus), batch_size)]
-                model.train(batch, total_examples=model.corpus_count, epochs=model.epochs)
-        except:
-            model.save('batched_incomplete_train_' + DOC2VEC_PATH)
-            print('    owo?  Stopped at batch', str(batch_i) + '?')
-        model.save('batched_' + DOC2VEC_PATH)
+                model.train(batch, total_examples=model.corpus_count,
+                            epochs=model.epochs)
 
-    else:
-        print("Start training model with the complete corpus")
-        try:
-            model.train(corpus, total_examples=model.corpus_count, epochs=model.epochs)
-        except:
-            print('... but an error occured.', end='')
-            model.save('whole_corpus_incomplete_train_' + DOC2VEC_PATH)
-            print(' it is still saved though :)')
-        model.save('whole_corpus_' + DOC2VEC_PATH)
+        else:
+            print('Start training model with the complete corpus')
+            model.train(corpus, total_examples=model.corpus_count,
+                        epochs=model.epochs)
+
+    except:
+        print(f'    owo?  Stopped at {batch_i}. Is that not too early?')
+        model.save(path)
+    model.save(path)
+
+
+def search_doc2vec(model, query, docs_by_id=None,
+                   result_len=MAX_NUMBER_OF_RESULTS):
+    if docs_by_id is None:
+        docs_by_id = read_ap.read_ap_docs()
+
+    # Deleting training data is advice by the official gensim website.
+    model.delete_temporary_training_data(keep_doctags_vectors=True,
+                                         keep_inference=True)
+
+    # Get cosine similarity for the query compared to the documents.
+    q_vec = model.infer_vector([q_tok for q_tok in read_ap.process_text(query)])
+    cos = torch.nn.CosineSimilarity()
+    results = {}
+    for doc_id, doc in docs_by_id.items():
+        results[doc_id] = cos(model.infer_vector(doc), q_vec)
+
+    # Rank the top results in a list.
+    results = list(results.items())
+    results.sort(key=lambda _: _[1])
+    return results[:result_len]
 
 
 
 
 
 if __name__ == "__main__":
-    train_doc2vec(read_ap.get_processed_docs())
-
     tok2idx, id2corpus = preprocess()
     skipgram = SkipGram(tok2idx)
-    skipgram.train(list(id2corpus.values()))
-    print(search(skipgram, "How are you", id2corpus))
+    skipgram._train(list(id2corpus.values()))
+    print(search_SkipGram(skipgram, "How are you", id2corpus))
 
     train_doc2vec(read_ap.get_processed_docs(), batched=True)
