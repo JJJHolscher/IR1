@@ -5,7 +5,8 @@ import lsi_lda
 from tf_idf import TfIdfRetrieval
 from tqdm import tqdm
 import scipy.stats
-
+import pickle
+import csv
 
 qrels, queries = read_ap.read_qrels()
 val_keys = [key for key in qrels.keys() if int(key) >= 76 and int(key) <= 100]
@@ -68,17 +69,21 @@ def get_model(idx):
 		return lsi_lda.LSIRetrieval('binary', path="lsi/5topics", num_topics=5)
 
 
-def make_results_file(model, run_name):
-	file_txt = []
+def make_results_file(model, run_name, folder='files/'):
+	file_lines = []
 	for query_id in test_keys:
 		results = model.search(test_queries[query_id])
 
 		for i, content in enumerate(results):
 			doc_id, score = content
+			line = query_id + ' Q0 ' + doc_id + ' ' + str(i+1) + ' ' + "{:.6f}".format(score) + ' ' + run_name 
+			file_lines.append(line)
 
-			file_txt.append()
+	path = folder + run_name + '.txt'
 
-
+	with open(path, 'w') as f:
+	    for item in file_lines:
+	        f.write("%s\n" % item)
 
 
 def analysis3_1(model):
@@ -133,4 +138,5 @@ def analysis4_1(model):
 
 # analysis4_1(get_model(12))
 
+make_results_file(get_model(2), 'binaryLSI')
 
