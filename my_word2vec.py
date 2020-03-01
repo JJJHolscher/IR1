@@ -45,77 +45,24 @@ DOC2VEC_PATH = "my_doc2vec.gsm"
 SKIPGRAM_DOC2VEC_PATH = "skipgrams_doc2vec.pkl"
 
 
-class SkipGram(torch.nn.Module):
+def filter_infrequent(docs_by_id, occurance_threshhold=OCCURANCE_THRESHHOLD):
+    """Create a dictionary similar to docs_by_id, but without any words
+    occurring less then 'OCCURANCE_THRESHHOLD' times.
+    """
+    # Count all tokens.
+    counter = Counter()
+    for tokens in docs_by_id.values():
+        counter.update(tokens)
 
-    def __init__(self, tok2idx, embedding_size=EMBEDDING_SIZE):
-        super(SkipGram, self).__init__()
-        self.tok2idx = tok2idx
-        self.embeddings = torch.nn.Embedding(len(self.tok2idx), embedding_size,
-                                             sparse=True)
-        self.loss_func = torch.nn.MSELoss()
+    # Filter any token that doesn't meet the minimal frequency threshhold.
+    for doc_id, doc in docs_by_id.items():
+        filtered_doc = []
+        for token in doc:
+            if counter[token] >= occurance_threshhold:
+                filtered_doc.append(token)
+        docs_by_id[doc_id] = filtered_doc
 
-    @staticmethod
-    def create(tok2idx, path=SKIPGRAM_PATH, embedding_size=EMBEDDING_SIZE):
-        skipgram = SkipGram(tok2idx, embedding_size=embedding_size)
-        if os.path.exists(path):
-            print("Loading the skipgram from disk...")
-            stored_skipgram = torch.load(path)
-            skipgram.load_state_dict(stored_skipgram)
-            skipgram.eval()
-        return skipgram
-
-    def forward(self, center_id, context_id):
-        """ Forward propagation step """
-        center_emb = self.embeddings(center_id)
-        context_emb = self.embeddings(context_id)
-        out = torch.mm(center_emb, context_emb.T)
-        return torch.nn.functional.logsigmoid(out)
-
-    def _train(self, corpus, save_path=SKIPGRAM_PATH):
-        """ Train """
-        num_batches = len(corpus) // BATCH_SIZE + 1
-        optimizer = torch.optim.SparseAdam(self.parameters())
-        try:
-            for i, batch in enumerate(self.to_batches(corpus)):
-                centers, contexts = batch[:, 0], batch[:, 1]
-                targets = batch[:, 2]
-
-                optimizer.zero_grad()
-                out = self(centers, contexts)
-                out = torch.sum(out * torch.eye(len(out)), dim=0)
-                loss = self.loss_func(out, targets.float())
-                print("Loss of batch", i, "/", num_batches, "\t", float(loss))
-                loss.backward()
-                optimizer.step()
-        finally:
-            print(" ~ oops UwU")
-            optimizer.zero_grad()
-            torch.save(self.state_dict(), save_path)
-
-        optimizer.zero_grad()
-        torch.save(self.state_dict(), save_path)
-
-    def to_batches(self, corpus, size=BATCH_SIZE):
-        corpus = corpus.copy()
-        random.shuffle(corpus)
-        end_i = 0
-        for start_i in range(0, len(corpus) - size, size):
-            end_i = start_i + size
-            yield sample(corpus[start_i : end_i])
-        yield sample(corpus[end_i:])
-
-    def doc2vec(self, doc):
-        """
-        Return a vector representation of the input document by taking the
-        average word embedding of all words in the document.
-        """
-        word_embeddings = self.embeddings(torch.LongTensor(doc))
-
-        vec = torch.zeros(len(self.embeddings(torch.LongTensor([0])).T))
-        for word_embd in word_embeddings:
-            vec += word_embd
-
-        return vec / len(word_embeddings)
+    return docs_by_id
 
 
 def all_words_to_indices(docs_by_id):
@@ -163,24 +110,82 @@ def preprocess(path=PROCESSED_DOCS_PATH):
     return tok2idx, id2corpus
 
 
-def filter_infrequent(docs_by_id, occurance_threshhold=OCCURANCE_THRESHHOLD):
-    """Create a dictionary similar to docs_by_id, but without any words
-    occurring less then 'OCCURANCE_THRESHHOLD' times.
-    """
-    # Count all tokens.
-    counter = Counter()
-    for tokens in docs_by_id.values():
-        counter.update(tokens)
+TOK2IDX, ID2CORPUS = preprocess()
 
-    # Filter any token that doesn't meet the minimal frequency threshhold.
-    for doc_id, doc in docs_by_id.items():
-        filtered_doc = []
-        for token in doc:
-            if counter[token] >= occurance_threshhold:
-                filtered_doc.append(token)
-        docs_by_id[doc_id] = filtered_doc
 
-    return docs_by_id
+
+class SkipGram(torch.nn.Module):
+
+    def __init__(self, tok2idx=TOK2IDX, embedding_size=EMBEDDING_SIZE):
+        super(SkipGram, self).__init__()
+        self.tok2idx = tok2idx
+        self.embeddings = torch.nn.Embedding(len(self.tok2idx), embedding_size,
+                                             sparse=True)
+        self.loss_func = torch.nn.MSELoss()
+
+    @staticmethod
+    def create(tok2idx=TOK2IDX, path=SKIPGRAM_PATH,
+               embedding_size=EMBEDDING_SIZE):
+        skipgram = SkipGram(tok2idx, embedding_size=embedding_size)
+        if os.path.exists(path):
+            print("Loading the skipgram from disk...")
+            stored_skipgram = torch.load(path)
+            skipgram.load_state_dict(stored_skipgram)
+            skipgram.eval()
+        return skipgram
+
+    def forward(self, center_id, context_id):
+        """ Forward propagation step """
+        center_emb = self.embeddings(center_id)
+        context_emb = self.embeddings(context_id)
+        out = torch.mm(center_emb, context_emb.T)
+        return torch.nn.functional.logsigmoid(out)
+
+    def _train(self, corpus=ID2CORPUS, save_path=SKIPGRAM_PATH):
+        """ Train """
+        num_batches = len(corpus) // BATCH_SIZE + 1
+        optimizer = torch.optim.SparseAdam(self.parameters())
+        try:
+            for i, batch in enumerate(self.to_batches(corpus)):
+                centers, contexts = batch[:, 0], batch[:, 1]
+                targets = batch[:, 2]
+
+                optimizer.zero_grad()
+                out = self(centers, contexts)
+                out = torch.sum(out * torch.eye(len(out)), dim=0)
+                loss = self.loss_func(out, targets.float())
+                print("Loss of batch", i, "/", num_batches, "\t", float(loss))
+                loss.backward()
+                optimizer.step()
+        finally:
+            print(" ~ oops")
+            optimizer.zero_grad()
+            torch.save(self.state_dict(), save_path)
+
+        optimizer.zero_grad()
+        torch.save(self.state_dict(), save_path)
+
+    def to_batches(self, corpus, size=BATCH_SIZE):
+        corpus = corpus.copy()
+        random.shuffle(corpus)
+        end_i = 0
+        for start_i in range(0, len(corpus) - size, size):
+            end_i = start_i + size
+            yield sample(corpus[start_i : end_i])
+        yield sample(corpus[end_i:])
+
+    def doc2vec(self, doc):
+        """
+        Return a vector representation of the input document by taking the
+        average word embedding of all words in the document.
+        """
+        word_embeddings = self.embeddings(torch.LongTensor(doc))
+
+        vec = torch.zeros(len(self.embeddings(torch.LongTensor([0])).T))
+        for word_embd in word_embeddings:
+            vec += word_embd
+
+        return vec / len(word_embeddings)
 
 
 def sample(corpus, context_window=CONTEXT_WINDOW):
@@ -230,7 +235,8 @@ def get_docs_as_vecs(model, id2corpus, path=SKIPGRAM_DOC2VEC_PATH):
     return id2vec
 
 
-def search_SkipGram(model, query, id2corpus, result_len=MAX_NUMBER_OF_RESULTS):
+def search_SkipGram(model, query, id2corpus=ID2CORPUS,
+                    result_len=MAX_NUMBER_OF_RESULTS):
     """
     Return the top 1000 ranked documents that match best the query according
     to the input model.
@@ -244,14 +250,15 @@ def search_SkipGram(model, query, id2corpus, result_len=MAX_NUMBER_OF_RESULTS):
     q_vec = model.doc2vec(query_repr).unsqueeze(dim=0)
     q_vec_norm = torch.mm(q_vec, q_vec.T)
 
-    results = {}
+    print('Comparing all document vectors to the query vector...')
+    results = []
     for doc_id, doc in id2corpus.items():
         vec = model.doc2vec(doc).unsqueeze(dim=0)
         norm = torch.mm(vec, vec.T)
-        results[doc_id] = torch.mm(vec, q_vec.T) / (norm * q_vec_norm)
+        score = torch.mm(vec, q_vec.T) / (norm * q_vec_norm)
+        results.append((doc_id, float(score)))
 
-    results = list(results.items())
-    results.sort(key=lambda _: _[1])
+    results.sort(key=lambda _: -_[1])
     return results[:result_len]
 
 
@@ -307,18 +314,21 @@ def train_doc2vec(docs_by_id, batch_size=BATCH_SIZE, path=DOC2VEC_PATH,
 def search_doc2vec(model, query, docs_by_id=None,
                    result_len=MAX_NUMBER_OF_RESULTS):
     if docs_by_id is None:
-        docs_by_id = read_ap.read_ap_docs()
+        docs_by_id = read_ap.get_processed_docs()
 
     # Deleting training data is advice by the official gensim website.
     model.delete_temporary_training_data(keep_doctags_vectors=True,
                                          keep_inference=True)
 
+    print("Comparing the query embedding with all document embeddings...")
     # Get cosine similarity for the query compared to the documents.
     q_vec = model.infer_vector([q_tok for q_tok in read_ap.process_text(query)])
+    q_vec = torch.FloatTensor(q_vec).unsqueeze(dim=0)
     cos = torch.nn.CosineSimilarity()
     results = {}
     for doc_id, doc in docs_by_id.items():
-        results[doc_id] = cos(model.infer_vector(doc), q_vec)
+        vec = torch.FloatTensor(model.infer_vector(doc)).unsqueeze(dim=0)
+        results[doc_id] = float(cos(vec, q_vec))
 
     # Rank the top results in a list.
     results = list(results.items())
@@ -327,12 +337,9 @@ def search_doc2vec(model, query, docs_by_id=None,
 
 
 
-
-
 if __name__ == "__main__":
-    tok2idx, id2corpus = preprocess()
-    skipgram = SkipGram(tok2idx)
-    skipgram._train(list(id2corpus.values()))
-    print(search_SkipGram(skipgram, "How are you", id2corpus))
+    skipgram = SkipGram()
+    skipgram._train(list(ID2CORPUS.values()))
+    print(search_SkipGram(skipgram, "How are you"))
 
     train_doc2vec(read_ap.get_processed_docs(), batched=True)
