@@ -4,6 +4,23 @@ from my_word2vec import get_trained_doc2vec, SkipGram, search_SkipGram,\
                         search_doc2vec, preprocess
 
 
+class Doc2Vec():
+	def _init_():
+		self.model = get_trained_doc2vec()
+
+	def search(query):
+        return search_doc2vec(self.model, query)
+
+
+class Word2Vec():
+
+	def _init_():
+        self.model = SkipGram.create(tok2idx)
+
+	def search(query):
+        return search_SkipGram(self.model, query)
+
+
 def search(query, doc2vec=False):
     if doc2vec:
         return search_doc2vec(get_trained_doc2vec(), query)
