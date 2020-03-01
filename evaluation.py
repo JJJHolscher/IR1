@@ -7,6 +7,7 @@ from tqdm import tqdm
 import scipy.stats
 import pickle
 import csv
+import analysis
 
 qrels, queries = read_ap.read_qrels()
 val_keys = [key for key in qrels.keys() if int(key) >= 76 and int(key) <= 100]
@@ -64,12 +65,15 @@ def get_model(idx):
 	elif idx == 4:
 		return lsi_lda.LDARetrieval()
 
+	elif idx == 5:
+		return analysis.Word2Vec()
+
 	# LSI BINARY 5 TOPICS
 	elif idx == 12:
 		return lsi_lda.LSIRetrieval('binary', path="lsi/5topics", num_topics=5)
 
 
-def make_results_file(model, run_name, folder='files/'):
+def make_results_file(model, run_name, folder='result_files/'):
 	file_lines = []
 	for query_id in test_keys:
 		results = model.search(test_queries[query_id])
@@ -138,5 +142,6 @@ def analysis4_1(model):
 
 # analysis4_1(get_model(12))
 
-# make_results_file(get_model(2), 'binaryLSI')
+# make_results_file(get_model(5), 'word2vec')
 
+# analysis4_1(get_model(5))
