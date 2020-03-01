@@ -138,5 +138,5 @@ def analysis4_1(model):
 
 # analysis4_1(get_model(12))
 
-make_results_file(get_model(2), 'binaryLSI')
+# make_results_file(get_model(2), 'binaryLSI')
 
