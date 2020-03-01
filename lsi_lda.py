@@ -187,4 +187,4 @@ class LDARetrieval:
 		results = [[self.dictionary[int(x.split('*')[1].replace("\"", ""))] for x in content.split('+')] for _,content in topics]
 
 		return results
-
+##
